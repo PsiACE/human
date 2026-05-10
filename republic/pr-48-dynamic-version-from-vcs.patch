@@ -1,0 +1,207 @@
+From 8864159ecd4c7555199f19e512136cd4d8f5353c Mon Sep 17 00:00:00 2001
+From: Chojan Shang <psiace@apache.org>
+Date: Sun, 10 May 2026 23:52:39 +0800
+Subject: [PATCH] feat: dynamic version from VCS and release notes
+ auto-generation
+
+Signed-off-by: Chojan Shang <psiace@apache.org>
+---
+ .github/workflows/on-release-main.yml | 42 +++++++++++----------------
+ .gitignore                            |  2 ++
+ pyproject.toml                        | 11 +++++--
+ src/republic/__about__.py             | 18 ------------
+ src/republic/__init__.py              | 12 ++++++++
+ src/republic/llm.py                   |  3 +-
+ uv.lock                               |  1 -
+ 7 files changed, 42 insertions(+), 47 deletions(-)
+ delete mode 100644 src/republic/__about__.py
+
+diff --git a/.github/workflows/on-release-main.yml b/.github/workflows/on-release-main.yml
+index 3e9261f..30f62b6 100644
+--- a/.github/workflows/on-release-main.yml
++++ b/.github/workflows/on-release-main.yml
+@@ -6,44 +6,36 @@ on:
+ 
+ jobs:
+ 
+-  set-version:
+-    runs-on: ubuntu-24.04
++  release-note:
++    runs-on: ubuntu-latest
++    permissions:
++      contents: write
+     steps:
+-      - uses: actions/checkout@v4
++      - name: Check out
++        uses: actions/checkout@v6
++        with:
++          fetch-depth: 0
+ 
+-      - name: Export tag
+-        id: vars
+-        run: echo tag=${GITHUB_REF#refs/*/} >> $GITHUB_OUTPUT
+-        if: ${{ github.event_name == 'release' }}
++      - uses: actions/setup-node@v6
++        with:
++          node-version: lts/*
+ 
+-      - name: Update project version
+-        run: |
+-          sed -i "s/^version = \".*\"/version = \"$RELEASE_VERSION\"/" pyproject.toml
++      - run: npx changelogithub
++        continue-on-error: true
+         env:
+-          RELEASE_VERSION: ${{ steps.vars.outputs.tag }}
+-        if: ${{ github.event_name == 'release' }}
+-
+-      - name: Upload updated pyproject.toml
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: pyproject-toml
+-          path: pyproject.toml
++          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+ 
+   publish:
+     runs-on: ubuntu-latest
+-    needs: [set-version]
+     steps:
+       - name: Check out
+-        uses: actions/checkout@v4
++        uses: actions/checkout@v6
++        with:
++          fetch-depth: 0
+ 
+       - name: Set up the environment
+         uses: ./.github/actions/setup-python-env
+ 
+-      - name: Download updated pyproject.toml
+-        uses: actions/download-artifact@v4
+-        with:
+-          name: pyproject-toml
+-
+       - name: Build package
+         run: uv build
+ 
+diff --git a/.gitignore b/.gitignore
+index 3311e1c..56a67b7 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -209,3 +209,5 @@ cython_debug/
+ marimo/_static/
+ marimo/_lsp/
+ __marimo__/
++
++_version.py
+diff --git a/pyproject.toml b/pyproject.toml
+index 6a21d4b..cdedef3 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "republic"
+-version = "0.5.8"
++dynamic = ["version"]
+ description = "Build LLM workflows like normal Python while keeping a full audit trail by default."
+ authors = [
+     { name = "Chojan Shang", email = "psiace@apache.org" },
+@@ -59,9 +59,16 @@ dev = [
+ ]
+ 
+ [build-system]
+-requires = ["hatchling"]
++requires = ["hatchling", "hatch-vcs"]
+ build-backend = "hatchling.build"
+ 
++
++[tool.hatch.version]
++source = "vcs"
++
++[tool.hatch.build.hooks.vcs]
++version-file = "src/republic/_version.py"
++
+ [tool.hatch.build.targets.wheel]
+ packages = ["src/republic"]
+ 
+diff --git a/src/republic/__about__.py b/src/republic/__about__.py
+deleted file mode 100644
+index 969ed17..0000000
+--- a/src/republic/__about__.py
++++ /dev/null
+@@ -1,18 +0,0 @@
+-DEFAULT_MODEL = "openai:gpt-4o-mini"
+-
+-__version__ = "0.5.8"
+-__author__ = "PsiACE, Frost Ming"
+-__author_email__ = "psiace@apache.org, me@frostming.com"
+-__copyright__ = "Copyright (c) 2026 Bub Build contributors."
+-__homepage__ = "https://github.com/bubbuild/republic"
+-__docs__ = "Minimal, tape-first LLM client with structured outputs."
+-
+-__all__ = [
+-    "DEFAULT_MODEL",
+-    "__author__",
+-    "__author_email__",
+-    "__copyright__",
+-    "__docs__",
+-    "__homepage__",
+-    "__version__",
+-]
+diff --git a/src/republic/__init__.py b/src/republic/__init__.py
+index 7ae4f63..e77e457 100644
+--- a/src/republic/__init__.py
++++ b/src/republic/__init__.py
+@@ -1,5 +1,9 @@
+ """Republic public API."""
+ 
++from importlib import import_module
++from importlib.metadata import PackageNotFoundError
++from importlib.metadata import version as metadata_version
++
+ from republic.auth import (
+     github_copilot_oauth_resolver,
+     load_openai_codex_oauth_tokens,
+@@ -52,3 +56,11 @@
+     "tool",
+     "tool_from_model",
+ ]
++
++try:
++    __version__ = import_module("republic._version").version
++except ModuleNotFoundError:
++    try:
++        __version__ = metadata_version("republic")
++    except PackageNotFoundError:
++        __version__ = "0.0.0"
+diff --git a/src/republic/llm.py b/src/republic/llm.py
+index 4e46379..90494a7 100644
+--- a/src/republic/llm.py
++++ b/src/republic/llm.py
+@@ -6,7 +6,6 @@
+ from collections.abc import Callable
+ from typing import Any, Literal, cast
+ 
+-from republic.__about__ import DEFAULT_MODEL
+ from republic.auth import APIKeyResolver
+ from republic.clients._internal import InternalOps
+ from republic.clients.chat import ChatClient
+@@ -35,6 +34,8 @@
+ from republic.tools.executor import ToolExecutor
+ from republic.tools.schema import ToolInput
+ 
++DEFAULT_MODEL = "openrouter:free"
++
+ 
+ class LLM:
+     """Developer-first LLM client powered by any-llm."""
+diff --git a/uv.lock b/uv.lock
+index bfdbea1..d4067e0 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -1153,7 +1153,6 @@ wheels = [
+ 
+ [[package]]
+ name = "republic"
+-version = "0.5.8"
+ source = { editable = "." }
+ dependencies = [
+     { name = "any-llm-sdk" },
