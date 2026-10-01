@@ -1,0 +1,26 @@
+# Local settings and secrets
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Python environments and generated files
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# JavaScript dependencies
+node_modules/
+
+# Rust and other build output
+target/
+build/
+dist/
+*.o
+*.obj
+*.exe
+a.out
